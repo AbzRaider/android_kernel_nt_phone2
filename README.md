@@ -1,3 +1,8 @@
+# How to Build Stadalone GKI Flashable Kernel Image 
+  - Run setuptools and run choices 1,2,3 & 4 for all the tools required for compilation and making the tree clean
+  - Run "git restore drivers/input"
+  - Run buildebug.sh to compile the kernel and obtain Image.gz (out/arch/arm64/Image.gz)
+  - Pack it with a AnyKernel Flashable zip and you have built your flashable kernel !
 # NOTHING Phone(2) Release Note
 - OS 2.0.1
   - First release opensource of kernel modules and devicetree
