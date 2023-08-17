@@ -461,6 +461,10 @@
 			embedded devices based on command line input.
 			See Documentation/block/cmdline-partition.rst
 
+	boot_cpus=	[SMP]
+			Rather than attempting to online all possible CPUs at
+			boot time, only online the specified set of CPUs.
+
 	boot_delay=	Milliseconds to delay each printk during boot.
 			Values larger than 10 seconds (10000) are changed to
 			no delay (0).
@@ -2533,6 +2537,12 @@
 
 	memblock=debug	[KNL] Enable memblock debug messages.
 
+	android12_only.will_be_removed_soon.memblock_nomap_remove= [KNL]
+			Setting this to true through kernel command line will
+			call memblock_remove on the regions marked with no-map
+			property thereby saving memory by removing page structs
+			for those regions. By default this is set to false.
+
 	load_ramdisk=	[RAM] [Deprecated]
 
 	lockd.nlm_grace_period=P  [NFS] Assign grace period.
@@ -3410,8 +3420,7 @@
 			difficult since unequal pointers can no longer be
 			compared.  However, if this command-line option is
 			specified, then all normal pointers will have their true
-			value printed.  Pointers printed via %pK may still be
-			hashed.  This option should only be specified when
+			value printed. This option should only be specified when
 			debugging the kernel.  Please do not use on production
 			kernels.
 
