@@ -28,6 +28,7 @@ static DEFINE_MUTEX(bcm_voter_lock);
  * @ws_list: list containing bcms that have different wake/sleep votes
  * @voter_node: list of bcm voters
  * @tcs_wait: mask for which buckets require TCS completion
+ * @init: flag to determine when init has completed.
  */
 struct bcm_voter {
 	struct device *dev;
@@ -37,6 +38,7 @@ struct bcm_voter {
 	struct list_head ws_list;
 	struct list_head voter_node;
 	u32 tcs_wait;
+	bool init;
 };
 
 static int cmp_vcd(void *priv, struct list_head *a, struct list_head *b)
@@ -65,12 +67,13 @@ static u64 bcm_div(u64 num, u32 base)
 	return num;
 }
 
-static void bcm_aggregate(struct qcom_icc_bcm *bcm)
+static void bcm_aggregate(struct qcom_icc_bcm *bcm, bool init)
 {
 	struct qcom_icc_node *node;
 	size_t i, bucket;
 	u64 agg_avg[QCOM_ICC_NUM_BUCKETS] = {0};
 	u64 agg_peak[QCOM_ICC_NUM_BUCKETS] = {0};
+	bool perf_mode[QCOM_ICC_NUM_BUCKETS] = {0};
 	u64 temp;
 
 	for (bucket = 0; bucket < QCOM_ICC_NUM_BUCKETS; bucket++) {
@@ -83,6 +86,8 @@ static void bcm_aggregate(struct qcom_icc_bcm *bcm)
 			temp = bcm_div(node->max_peak[bucket] * bcm->aux_data.width,
 				       node->buswidth);
 			agg_peak[bucket] = max(agg_peak[bucket], temp);
+
+			perf_mode[bucket] |= node->perf_mode[bucket];
 		}
 
 		temp = agg_avg[bucket] * bcm->vote_scale;
@@ -90,14 +95,37 @@ static void bcm_aggregate(struct qcom_icc_bcm *bcm)
 
 		temp = agg_peak[bucket] * bcm->vote_scale;
 		bcm->vote_y[bucket] = bcm_div(temp, bcm->aux_data.unit);
+
+		if (bcm->enable_mask && (bcm->vote_x[bucket] || bcm->vote_y[bucket])) {
+			bcm->vote_x[bucket] = 0;
+			bcm->vote_y[bucket] = bcm->enable_mask;
+			if (perf_mode[bucket])
+				bcm->vote_y[bucket] |= bcm->perf_mode_mask;
+		}
 	}
 
-	if (bcm->keepalive && bcm->vote_x[QCOM_ICC_BUCKET_AMC] == 0 &&
-	    bcm->vote_y[QCOM_ICC_BUCKET_AMC] == 0) {
-		bcm->vote_x[QCOM_ICC_BUCKET_AMC] = 1;
-		bcm->vote_x[QCOM_ICC_BUCKET_WAKE] = 1;
-		bcm->vote_y[QCOM_ICC_BUCKET_AMC] = 1;
-		bcm->vote_y[QCOM_ICC_BUCKET_WAKE] = 1;
+	if (bcm->keepalive || bcm->keepalive_early) {
+		/*
+		 * Keepalive should normally only be enforced for AMC/WAKE so
+		 * that BCMs are only kept alive when HLOS is active. But early
+		 * during init all clients haven't had a chance to vot yet, and
+		 * some have use cases that persist when HLOS is asleep. So
+		 * during init vote to all sets, including SLEEP.
+		 */
+		if (init) {
+			bcm->vote_x[QCOM_ICC_BUCKET_AMC] = 16000;
+			bcm->vote_x[QCOM_ICC_BUCKET_WAKE] = 16000;
+			bcm->vote_x[QCOM_ICC_BUCKET_SLEEP] = 16000;
+			bcm->vote_y[QCOM_ICC_BUCKET_AMC] = 16000;
+			bcm->vote_y[QCOM_ICC_BUCKET_WAKE] = 16000;
+			bcm->vote_y[QCOM_ICC_BUCKET_SLEEP] = 16000;
+		} else if (bcm->vote_x[QCOM_ICC_BUCKET_AMC] == 0 &&
+			   bcm->vote_y[QCOM_ICC_BUCKET_AMC] == 0) {
+			bcm->vote_x[QCOM_ICC_BUCKET_AMC] = 1;
+			bcm->vote_x[QCOM_ICC_BUCKET_WAKE] = 1;
+			bcm->vote_y[QCOM_ICC_BUCKET_AMC] = 1;
+			bcm->vote_y[QCOM_ICC_BUCKET_WAKE] = 1;
+		}
 	}
 }
 
@@ -263,7 +291,7 @@ int qcom_icc_bcm_voter_commit(struct bcm_voter *voter)
 
 	mutex_lock(&voter->lock);
 	list_for_each_entry(bcm, &voter->commit_list, list)
-		bcm_aggregate(bcm);
+		bcm_aggregate(bcm, voter->init);
 
 	/*
 	 * Pre sort the BCMs based on VCD for ease of generating a command list
@@ -287,7 +315,19 @@ int qcom_icc_bcm_voter_commit(struct bcm_voter *voter)
 
 	ret = rpmh_write_batch(voter->dev, RPMH_ACTIVE_ONLY_STATE,
 			       cmds, commit_idx);
-	if (ret) {
+
+	/*
+	 * Ignore -EBUSY for AMC requests, since this can only happen for AMC
+	 * requests when the RSC is in solver mode. We can only be in solver
+	 * mode at the time of request for secondary RSCs (e.g. Display RSC),
+	 * since the primary Apps RSC is only in solver mode while
+	 * entering/exiting power collapse when SW isn't running. The -EBUSY
+	 * response is expected in solver and is a non-issue, since we just
+	 * want the request to apply to the WAKE set in that case instead.
+	 * Interconnect doesn't know when the RSC is in solver, so just always
+	 * send AMC and ignore the harmless error response.
+	 */
+	if (ret && ret != -EBUSY) {
 		pr_err("Error sending AMC RPMH requests (%d)\n", ret);
 		goto out;
 	}
@@ -340,6 +380,21 @@ out:
 }
 EXPORT_SYMBOL_GPL(qcom_icc_bcm_voter_commit);
 
+/**
+ * qcom_icc_bcm_voter_clear_init - clear init flag used during boot up
+ * @voter: voter that we need to clear the init flag for
+ */
+void qcom_icc_bcm_voter_clear_init(struct bcm_voter *voter)
+{
+	if (!voter)
+		return;
+
+	mutex_lock(&voter->lock);
+	voter->init = false;
+	mutex_unlock(&voter->lock);
+}
+EXPORT_SYMBOL(qcom_icc_bcm_voter_clear_init);
+
 static int qcom_icc_bcm_voter_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -351,6 +406,7 @@ static int qcom_icc_bcm_voter_probe(struct platform_device *pdev)
 
 	voter->dev = &pdev->dev;
 	voter->np = np;
+	voter->init = true;
 
 	if (of_property_read_u32(np, "qcom,tcs-wait", &voter->tcs_wait))
 		voter->tcs_wait = QCOM_ICC_TAG_ACTIVE_ONLY;

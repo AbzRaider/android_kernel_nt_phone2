@@ -50,6 +50,17 @@ config SCSI_UFSHCD
 	  However, do not compile this as a module if your root file system
 	  (the one containing the directory /) is located on a UFS device.
 
+config UFS_DBG
+	bool "Universal Flash Storage Debug Mode"
+	depends on SCSI_UFSHCD
+	help
+	This selects the debug mode for ufs vendor driver.
+	  Enables tracing for QTI ufs driver.
+	  This also enables ftrace for ufs core and SCSI.
+	  Enabling this would have an adverse performance impact on disk IO.
+
+	  If unsure, say N.
+
 config SCSI_UFSHCD_PCI
 	tristate "PCI bus based UFS Controller support"
 	depends on SCSI_UFSHCD && PCI
@@ -184,6 +195,14 @@ config SCSI_UFS_CRYPTO
 	  capabilities of the UFS device (if present) to perform crypto
 	  operations on data being transferred to/from the device.
 
+config SCSI_UFS_CRYPTO_QTI
+	tristate "Vendor specific UFS Crypto Engine Support"
+	depends on SCSI_UFS_CRYPTO
+	help
+	 Enable Vendor Crypto Engine Support in UFS
+	 Enabling this allows kernel to use UFS crypto operations defined
+	 and implemented by QTI.
+
 config SCSI_UFS_HPB
 	bool "Support UFS Host Performance Booster"
 	depends on SCSI_UFSHCD
@@ -192,3 +211,27 @@ config SCSI_UFS_HPB
 	  L2P (logical to physical) map of UFS to host DRAM. The driver uses HPB
 	  read command by piggybacking physical page number for bypassing FTL (flash
 	  translation layer)'s L2P address translation.
+
+config UFSFEATURE
+	bool "UFS feature activate"
+	default y
+	depends on SCSI_UFSHCD
+	help
+	  UFS feature activate such as hpb, tw and etc.
+
+config UFSHID
+	bool "UFS Host Initiated Defrag support"
+	default y
+	depends on SCSI_UFSHCD && UFSFEATURE
+	help
+	  UFS HID Feature Enable
+
+config UFSHID_POC
+	bool "UFSHID_POC test"
+	depends on SCSI_UFSHCD && UFSFEATURE && UFSHID
+	help
+	  UFS HID POC test
+	  1. block to enter suspend state
+	  2. auto_hibern8 enable/disable (HCI)
+	  3. set flag bDefragOperation
+	  4. debug msg enable (default : disable)
