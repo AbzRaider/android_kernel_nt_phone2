@@ -3825,9 +3825,14 @@ const struct net_device_ops net_ops_struct = {
 	.ndo_tx_timeout = hdd_softap_tx_timeout,
 	.ndo_get_stats = hdd_get_stats,
 	.ndo_set_mac_address = hdd_hostapd_set_mac_address,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
 	.ndo_do_ioctl = hdd_ioctl,
+#endif
 	.ndo_change_mtu = hdd_hostapd_change_mtu,
 	.ndo_select_queue = hdd_select_queue,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+	.ndo_siocdevprivate = hdd_dev_private_ioctl,
+#endif
 };
 
 #ifdef WLAN_FEATURE_TSF_PTP
@@ -5107,6 +5112,12 @@ static int wlan_hdd_sap_p2p_11ac_overrides(struct hdd_adapter *ap_adapter)
 	uint32_t channel_bonding_mode;
 	bool go_11ac_override = 0;
 	bool sap_11ac_override = 0;
+
+	/*
+	 * No need to override for Go/Sap on 6 GHz band
+	 */
+	if (WLAN_REG_IS_6GHZ_CHAN_FREQ(sap_cfg->chan_freq))
+		return 0;
 
 	ucfg_mlme_get_sap_force_11n_for_11ac(hdd_ctx->psoc,
 					     &sap_force_11n_for_11ac);

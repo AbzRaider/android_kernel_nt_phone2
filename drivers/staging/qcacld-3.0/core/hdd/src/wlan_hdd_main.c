@@ -3889,6 +3889,7 @@ static void hdd_nan_register_callbacks(struct hdd_context *hdd_ctx)
 
 	cb_obj.ndi_open = hdd_ndi_open;
 	cb_obj.ndi_close = hdd_ndi_close;
+	cb_obj.ndi_set_mode = hdd_ndi_set_mode;
 	cb_obj.ndi_start = hdd_ndi_start;
 	cb_obj.ndi_delete = hdd_ndi_delete;
 	cb_obj.drv_ndi_create_rsp_handler = hdd_ndi_drv_ndi_create_rsp_handler;
@@ -6037,10 +6038,15 @@ static const struct net_device_ops wlan_drv_ops = {
 	.ndo_set_features = hdd_set_features,
 	.ndo_tx_timeout = hdd_tx_timeout,
 	.ndo_get_stats = hdd_get_stats,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
 	.ndo_do_ioctl = hdd_ioctl,
+#endif
 	.ndo_set_mac_address = hdd_set_mac_address,
 	.ndo_select_queue = hdd_select_queue,
 	.ndo_set_rx_mode = hdd_set_multicast_list,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+	.ndo_siocdevprivate = hdd_dev_private_ioctl,
+#endif
 };
 
 #ifdef FEATURE_MONITOR_MODE_SUPPORT
@@ -17656,6 +17662,23 @@ static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 		return -EINVAL;
 	}
 
+	{//scope
+		static const char wlan_logon_str[] = "FW1";
+		static const char wlan_logoff_str[] = "FW0";
+		if (strncmp(buf, wlan_logon_str, strlen(wlan_logon_str)) == 0) {
+			struct hdd_context *hdd_ctx_tmp = cds_get_context(QDF_MODULE_ID_HDD);
+			if (hdd_ctx_tmp) pld_set_fw_log_mode(hdd_ctx_tmp->parent_dev, 1);
+			hdd_info("Wifi fw log on from UI\n");
+			goto exit;
+		}
+		if (strncmp(buf, wlan_logoff_str, strlen(wlan_logoff_str)) == 0) {
+			struct hdd_context *hdd_ctx_tmp = cds_get_context(QDF_MODULE_ID_HDD);
+			if (hdd_ctx_tmp) pld_set_fw_log_mode(hdd_ctx_tmp->parent_dev, 0);
+			hdd_info("Wifi fw log off from UI\n");
+			goto exit;
+		}
+	}//scope
+
 	if (strncmp(buf, wlan_off_str, strlen(wlan_off_str)) == 0) {
 		hdd_info("Wifi turning off from UI\n");
 		hdd_inform_wifi_off();
@@ -20250,6 +20273,8 @@ wlan_hdd_add_monitor_check(struct hdd_context *hdd_ctx,
 	if (ucfg_pkt_capture_get_mode(hdd_ctx->psoc) !=
 						PACKET_CAPTURE_MODE_DISABLE)
 		wlan_hdd_del_p2p_interface(hdd_ctx);
+
+	params.is_add_virtual_iface = 1;
 
 	mon_adapter = hdd_open_adapter(hdd_ctx, QDF_MONITOR_MODE, name,
 				       wlan_hdd_get_intf_addr(
